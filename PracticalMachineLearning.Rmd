@@ -1,0 +1,177 @@
+---
+title: "Prediction Assignment Writeup: Correct Weight Lifting Exercises"
+author: "Miguel Angel Huerta"
+date: "2 de septiembre de 2018"
+output: html_document
+---
+#Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your will make use of data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. GThese six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. 
+
+More information
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+#Goal
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+
+```{r setup, include=FALSE}
+list.of.packages <- c("knitr","caret","rpart","rpart.plot","rattle","randomForest","corrplot","gbm")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(corrplot)
+library(gbm)
+set.seed(301)
+
+knitr::opts_chunk$set(echo = TRUE)
+##ENVIRONMENT SETUP
+dataDir <- "data"
+trainingFile <-"./data/trainingFile.csv"
+trainingFileURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testFile <- "./data/testFile.csv"
+testFileURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+setwd("~/CURSODATA/coursera/08_PracticalMachineLearning")
+if (!dir.exists(dataDir)){  dir.create(dataDir)}
+if (!file.exists(trainingFile)){download.file(trainingFileURL ,destfile=trainingFile,method="auto")}
+if (!file.exists(testFile)){download.file(testFileURL ,destfile=testFile,method="auto")}
+```
+
+## DATA CLEANING
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r datacleaning}
+testData <- read.csv(testFile)
+trainingData <- read.csv(trainingFile)
+# remove variables with Nearly Zero Variance
+NZV <- nearZeroVar(trainingData)
+TrainSet <- trainingData[, -NZV]
+TestSet  <- testData[, -NZV]
+dim(TestSet)
+
+# remove variables that are mostly NA
+AllNA    <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95
+TrainSet <- TrainSet[, AllNA==FALSE]
+TestSet  <- TestSet[, AllNA==FALSE]
+dim(TestSet)
+
+# remove identification only variables (columns 1 to 6)
+TrainSet <- TrainSet[, -(1:6)]
+TestSet  <- TestSet[, -(1:6)]
+dim(TrainSet)
+
+```
+
+## Partitioning Datasets
+
+Following the recommendation in the course Practical Machine Learning, we will split our data into a training data set (70% of the total cases) and a testing data set (40% of the total cases; the latter should not be confused with the data in the pml-testing.csv file). This will allow us to estimate the out of sample error of our predictor.
+
+```{r partitioningDatasets}
+# create a partition using caret with the training dataset on 70,30 ratio
+inTrain  <- createDataPartition(TrainSet$classe, p=0.7, list=FALSE)
+
+training <- TrainSet[inTrain, ]
+
+testing  <- TrainSet[-inTrain, ]
+dim(TrainSet)
+dim(training)
+dim(testing)
+```
+
+## MODEL SELECTION
+
+Three popular methods will be applied to model the regressions (in the Train dataset) and the best one (with higher accuracy when applied to the Test dataset) will be used for the quiz predictions. The methods are: Random Forests, Decision Tree and Generalized Boosted Model, as described below. 
+A Confusion Matrix is plotted at the end of each analysis to better visualize the accuracy of the models.
+
+#Decision Tree
+```{r Decsion Tree}
+#Decision Tree
+set.seed(12345)
+modFitDT <- rpart(classe ~ ., data = training, method="class", control = rpart.control(method = "cv", number = 10))
+fancyRpartPlot(modFitDT)
+
+#Predicting
+set.seed(12345)
+prediction <- predict(modFitDT, testing, type = "class")
+confMatDecTree <-confusionMatrix(prediction, testing$classe)
+confMatDecTree
+DecTreeAccurancy <- round(confMatDecTree$overall['Accuracy'], 4)
+
+# plot matrix results
+plot(confMatDecTree$table, col = confMatDecTree$byClass, 
+     main = paste("Decision Tree - Accuracy =",DecTreeAccurancy))
+```
+
+#Random Forest
+Using random forest, the out of sample error should be small. The error will be estimated using the 40% testing sample. We should expect an error estimate of < 3%.
+
+```{r Random Forest}
+# model fit
+set.seed(301)
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modFitRandForest <- train(classe ~ ., data=training, method="rf",
+                          trControl=controlRF)
+modFitRandForest$finalModel
+
+plot(modFitRandForest)
+
+# prediction on Test dataset
+predictRandForest <- predict(modFitRandForest, newdata=testing)
+confMatRandForest <- confusionMatrix(predictRandForest, testing$classe)
+confMatRandForest
+RandomForestAccuracy <- round(confMatRandForest$overall['Accuracy'], 4)
+
+#plot matrix results
+plot(confMatRandForest$table, col = confMatRandForest$byClass, 
+     main = paste("Random Forest - Accuracy =",RandomForestAccuracy))
+
+```
+
+#GBM Generalized Boosted Model
+
+```{r GBM}
+# model fit
+set.seed(301)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modFitGBM  <- train(classe ~ ., data=training, method = "gbm",
+                    trControl = controlGBM, verbose = FALSE)
+
+modFitGBM$finalModel
+
+plot(modFitGBM)
+
+# prediction on Test dataset
+predictGBM <- predict(modFitGBM, newdata=testing)
+confMatGBM <- confusionMatrix(predictGBM, testing$classe)
+confMatGBM
+
+GBMAccuracy <- round(confMatGBM$overall['Accuracy'], 4)
+# plot matrix results
+plot(confMatGBM$table, col = confMatGBM$byClass, 
+     main = paste("GBM - Accuracy =", GBMAccuracy))
+
+
+```
+
+#PREDICTING MODEL AND RESULTS
+The accuracy of the 3 regression modeling methods above are:
+  
+Random Forest : 0.9968 Decision Tree : 0.8291 GBM : 0.9884 
+
+```{r predicting}
+paste0("Random Forest : ",round(confMatRandForest$overall['Accuracy'], 4)," Decision Tree : ",DecTreeAccurancy," GBM : ",GBMAccuracy," .Based on this results, the Random Forest model will be applied to predict the 20 quiz results (testing dataset) as shown below.")
+predictTEST <- predict(modFitRandForest, newdata=TestSet)
+predictTEST
+
+```
